@@ -15,9 +15,15 @@ def read_pronounce(language)
     .to_ruby
 end
 
+def shell_command_exists?(command)
+  system("command -v #{command} > /dev/null 2>&1")
+end
+
 $pronounce = read_pronounce('en')
 $ftype = read_symbols('common')
 $ftype_matcher = Regexp.escape($ftype.keys.join)
+# TODO also check for presence of say, and otherwise notify
+$say_cmd = shell_command_exists?('espeak') ? 'espeak' : 'say'
 
 Neovim.plugin do |plug|
   plug.command(:P, range: true, nargs: '*') do |
@@ -34,7 +40,7 @@ Neovim.plugin do |plug|
       pronunciation = $pronounce[symbol] || symbol
       " #{pronunciation} "
     }
-    system 'espeak', p_output
+    system $say_cmd, p_output
     nvim.current.window.cursor = position
     nvim.command(p_cmd) # also generate output
   end
