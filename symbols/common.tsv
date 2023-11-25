@@ -1,0 +1,16 @@
+,	comma
+.	dot
+;	semicolon
+:	colon
+"	quotes
+'	quote
+|	bar
+-	dash
+/	slash
+\	backslash
+(	parenthesis_l
+)	parenthesis_r
+[	bracket_l
+]	bracket_r
+{	brace_l
+}	brace_r

@@ -1,0 +1,7 @@
+---
+parenthesis_l: paren
+parenthesis_r: close paren
+bracket_l: bracket
+bracket_r: close bracket
+brace_l: brace
+brace_r: close brace
