@@ -1,7 +1,15 @@
 require 'csv'
 require 'yaml'
 
-PLUGIN_DIR = File.dirname(File.expand_path(__FILE__), 3)
+def dirname(filename, level = 1)
+  if RUBY_VERSION >= "3.1.4"
+    return File.dirname(File.expand_path(filename), level)
+  elsif level <= 0
+    return File.expand_path(filename)
+  else
+    return File.dirname(dirname(filename, level - 1))
+  end
+end
 
 def read_symbols(ftype)
   CSV.readlines(File.join(PLUGIN_DIR, 'symbols', ftype + '.tsv'),
@@ -18,6 +26,8 @@ end
 def shell_command_exists?(command)
   system("command -v #{command} > /dev/null 2>&1")
 end
+
+PLUGIN_DIR = dirname(__FILE__, 3)
 
 $pronounce = read_pronounce('en')
 $ftype = read_symbols('common')
