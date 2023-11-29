@@ -1,0 +1,10 @@
+TODO
+
+OPTIONS
+
+speak_command: pick the shell command to speak
+
+number:
+0 - never say line numbers
+1 - follow number setting
+2 - always say line numbers
