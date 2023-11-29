@@ -55,11 +55,28 @@ Neovim.plugin do |plug|
     nvim.command(p_cmd) # also generate output
   end
 
+  plug.command(:ExreaderStart) do |nvim|
+    options = nvim.list_uis()[0]
+    options.delete('width')
+    options.delete('height')
+    options.delete('chan')
+    nvim.ui_attach(999, 999, options.merge({
+      'ext_cmdline' => true,
+      'ext_messages' => true,
+      # 'override' => true,
+    }))
+    Thread.new do
+      loop do
+        msg = nvim.session.next
+        next if msg.method_name != 'redraw'
+        File.open('/Users/huluk/Desktop/nvim_plug2.log', 'a') do |f|
+          f.puts msg
+        end
+      end
+    end
+  end
+
   # plug.autocmd(:BufReadPost) do |nvim|
   #   # $ftype = read_symbols(ftype)
-  # end
-
-  # plug.ui_attach(999, 999, {}) do |*a|
-  #   Neovim.logger << a.inspect
   # end
 end
