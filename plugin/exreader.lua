@@ -10,7 +10,12 @@ local ts_utils = require 'nvim-treesitter.ts_utils'
 local options = {
   speak_command = 'espeak',
   number = 1, -- 0: never, 1: follow 'number', 2: always
+  numberformat = 'line %d: ',
   relativenumber = 0, -- 0: absolute, 1: follow 'relativenumber', 2: always
+  relativenumberformat = 'newline %d: ',
+  -- explicit number (via ex flag '#') triggers:
+  -- 0: nonumber, 1: number, 2: relativenumber
+  explicitnumber = 1,
   use_treesitter = 1,
 }
 
@@ -107,16 +112,62 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   return output
 end
 
+local function none_formatter(_, _) return '' end
+
+local function linenumber_formatter(number, offset)
+  return fmt(options.numberformat, number + offset)
+end
+
+local function relativenumber_formatter(number, offset)
+  if offset == 0 then
+    return ''
+  else
+    return fmt(options.relativenumberformat, offset)
+  end
+end
+
+local function get_prefix_formatter(number_flag)
+  if number_flag then
+    if options.explicitnumber <= 0 then
+      return none_formatter
+    elseif options.explicitnumber >= 2 then
+      return relativenumber_formatter
+    else
+      return linenumber_formatter
+    end
+  end
+
+  if number_flag == false then return '' end -- explicit false case.
+
+  if options.relativenumber >= 2 or (
+    options.relativenumber == 1 and
+      vim.api.nvim_get_option_value('relativenumber', {})) then
+    return relativenumber_formatter
+  elseif options.number >= 2 or (
+    options.number == 1 and vim.api.nvim_get_option_value('number', {})) then
+    return linenumber_formatter
+  end
+  return none_formatter
+end
+
 -------------------- PUBLIC --------------------------------
 function M.speak(str)
   os.execute(fmt('%s %s', options.speak_command, vim.fn.shellescape(str)))
 end
 
-function M.print(start_row, end_row)
+-- arguments:
+--   start_row: 0-based index.
+--   end_row:   0-based index.
+--   number:    whether to output line numbers.
+function M.print(start_row, end_row, number)
   local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
-  -- TODO follow options.number
-  local output = table.concat(lines, '.\n')
-  M.speak(output)
+  local output = {}
+  local prefix_formatter = get_prefix_formatter(number)
+  for i,line in ipairs(lines) do
+    local prefix = prefix_formatter(start_row + 1, i - 1)
+    table.insert(output, prefix .. line)
+  end
+  M.speak(table.concat(output, '.\n'))
 end
 
 function M.line_length(row)
@@ -138,19 +189,21 @@ end
 function M.ta(args) M.tree_align(args.line1 - 1, args.line2 - 1) end
 
 function M.print_cmd(args)
-  -- TODO handle ex flags
+  -- TODO handle all ex flags, and allow for no space before flags
   if next(args.fargs) == nil then
     return M.print(args.line1 - 1, args.line2 - 1)
   end
 
   local line_count = tonumber(args.fargs[1]) or 1
+  local number = args.fargs[2]
   local start_row
   if args.range == 2 then
     start_row = args.line2 - 1
   else
     start_row = args.line1 - 1
   end
-  M.print(start_row, start_row + line_count - 1)
+  M.print(start_row, start_row + line_count - 1, number)
+  -- TODO move cursor
 end
 
 -------------------- COMMANDS ------------------------------
