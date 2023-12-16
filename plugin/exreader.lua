@@ -104,8 +104,14 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
     add_to_output(node, node)
   end
 
-  for _,tree in ipairs(vim.treesitter.get_parser():parse()) do
-    add_tree_to_output(tree)
+  local success, parser = pcall(function()
+    return vim.treesitter.get_parser()
+  end)
+
+  if success then
+    for _,tree in ipairs(parser:parse()) do
+      add_tree_to_output(tree)
+    end
   end
   ensure_output_until(end_row, end_col + 1)
 
