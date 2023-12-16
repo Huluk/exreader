@@ -17,7 +17,7 @@ local options = {
   speak_command = 'espeak --punct',
   number = 1, -- 0: never, 1: follow 'number', 2: always
   ssml_breakformat = '<break /> ',
-  fallback_breakformat = ': ',
+  fallback_breakformat = '.\n',
   numberformat = 'line %d%s',
   relativenumber = 0, -- 0: absolute, 1: follow 'relativenumber', 2: always
   relativenumberformat = 'newline %d%s',
@@ -60,8 +60,12 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
 
   local output = {}
 
-  local function subline_until(col) -- exclusive
-    return lines[1 + printed_row - start_row]:sub(printed_col + 1, col)
+  local function insert_row(node, col) -- exclusive
+    table.insert(output, {
+      text = lines[1 + printed_row - start_row]:sub(printed_col + 1, col),
+      node = node,
+      row = printed_row,
+    })
   end
 
   local function ensure_output_until(row, col, node) -- col exclusive
@@ -73,10 +77,7 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
       col = end_col + 1
     end
     while printed_row < row do
-      table.insert(output, {
-        text = subline_including(),
-        node = node,
-      })
+      insert_row(node)
       printed_row = printed_row + 1
       printed_col = 0
     end
@@ -86,23 +87,18 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
     if row == end_row then
       col = math.min(col, end_col + 1)
     end
-    table.insert(output, {
-      text = subline_until(col),
-      node = node,
-    })
+    insert_row(node, col)
     printed_col = col
   end
 
   local function add_to_output(node, surrounding_named_node)
+    if node:named() then
+      surrounding_named_node = node
+    end
     for child in node:iter_children() do
       local child_row1, child_col1, _ = child:start()
-      if node:named() then
-        ensure_output_until(child_row1, child_col1, node)
-        add_to_output(child, node)
-      else
-        ensure_output_until(child_row1, child_col1, surrounding_named_node)
-        add_to_output(child, surrounding_named_node)
-      end
+      ensure_output_until(child_row1, child_col1, surrounding_named_node)
+      add_to_output(child, surrounding_named_node)
     end
     local row2, col2, _ = node:end_()
     if node:named() then
@@ -115,7 +111,7 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
     if node then
       local row, col, _ = node:start()
       ensure_output_until(row, col)
-      add_to_output(node, node)
+      add_to_output(node)
     end
   end
 
@@ -186,8 +182,7 @@ end
 -------------------- PUBLIC --------------------------------
 
 function M.speak(str)
-  local args = ''
-  if options.use_ssml then args = '-m' end
+  local args = options.use_ssml and '-m' or ''
   local input = vim.fn.shellescape(str)
   os.execute(fmt('%s %s %s', options.speak_command, args, input))
 end
@@ -201,13 +196,15 @@ function M.print(start_row, end_row, number)
   local output = {}
   local prefix_formatter = get_prefix_formatter(number)
   for i,line in ipairs(lines) do
-    local prefix = prefix_formatter(start_row + 1, i - 1)
-    if options.use_ssml then
-      line = line:gsub('<', '&lt;'):gsub('>', '&gt;')
+    if string.match(line, "%S") then
+      local prefix = prefix_formatter(start_row + 1, i - 1)
+      if options.use_ssml then
+        line = line:gsub('<', '&lt;'):gsub('>', '&gt;')
+      end
+      table.insert(output, prefix .. line)
     end
-    table.insert(output, prefix .. line)
   end
-  M.speak(table.concat(output, '.\n'))
+  M.speak(table.concat(output, breakformat()))
 end
 
 function M.line_length(row)
@@ -218,14 +215,12 @@ end
 function M.tree_align(start_row, end_row)
   local t = buf_text_with_nodes(start_row, 0, end_row, -1)
   for _,tuple in ipairs(t) do
-    local type = ''
     if tuple.node then tuple.type = tuple.node:type() end
   end
   print(vim.inspect(t))
 end
 
--- TODO rm this and cmd
-function M.ta(args) M.tree_align(args.line1 - 1, args.line2 - 1) end
+function M.debug_tree(args) M.tree_align(args.line1 - 1, args.line2 - 1) end
 
 function M.print_cmd(args)
   -- TODO handle all ex flags, and allow for no space before flags
@@ -235,14 +230,13 @@ function M.print_cmd(args)
 
   local line_count = tonumber(args.fargs[1]) or 1
   local number = args.fargs[2]
-  local start_row
-  if args.range == 2 then
-    start_row = args.line2 - 1
-  else
-    start_row = args.line1 - 1
+  local start_row = (args.range == 2 and args.line2 or args.line1) - 1
+  local end_row = start_row + line_count - 1
+  M.print(start_row, end_row, number)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  if cursor[0] ~= end_row + 1 then
+    vim.api.nvim_win_set_cursor(0, { end_row + 1, cursor[1] })
   end
-  M.print(start_row, start_row + line_count - 1, number)
-  -- TODO move cursor
 end
 
 function M.info(args)
@@ -257,7 +251,7 @@ vim.api.nvim_create_user_command('P', M.print_cmd, {
   range = true,
 })
 
-vim.api.nvim_create_user_command('Z', M.ta, {
+vim.api.nvim_create_user_command('Z', M.debug_tree, {
   desc = 'Debug-print [range] lines with treesitter nodes',
   range = true,
 })
