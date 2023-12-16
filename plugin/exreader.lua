@@ -8,14 +8,17 @@ local fmt = string.format
 local ts_utils = require 'nvim-treesitter.ts_utils'
 
 local options = {
-  speak_command = 'espeak',
+  speak_command = 'espeak --punct',
   number = 1, -- 0: never, 1: follow 'number', 2: always
-  numberformat = 'line %d: ',
+  ssml_breakformat = '<break /> ',
+  fallback_breakformat = ': ',
+  numberformat = 'line %d%s',
   relativenumber = 0, -- 0: absolute, 1: follow 'relativenumber', 2: always
-  relativenumberformat = 'newline %d: ',
+  relativenumberformat = 'newline %d%s',
   -- explicit number (via ex flag '#') triggers:
   -- 0: nonumber, 1: number, 2: relativenumber
   explicitnumber = 1,
+  use_ssml = 1, -- use Speech Synthesis Markup Language.
   use_treesitter = 1,
 }
 
@@ -118,17 +121,25 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   return output
 end
 
+local function breakformat()
+  if options.use_ssml then
+    return options.ssml_breakformat
+  else
+    return options.fallback_breakformat
+  end
+end
+
 local function none_formatter(_, _) return '' end
 
 local function linenumber_formatter(number, offset)
-  return fmt(options.numberformat, number + offset)
+  return fmt(options.numberformat, number + offset, breakformat())
 end
 
 local function relativenumber_formatter(number, offset)
   if offset == 0 then
     return ''
   else
-    return fmt(options.relativenumberformat, offset)
+    return fmt(options.relativenumberformat, offset, breakformat())
   end
 end
 
@@ -158,7 +169,10 @@ end
 
 -------------------- PUBLIC --------------------------------
 function M.speak(str)
-  os.execute(fmt('%s %s', options.speak_command, vim.fn.shellescape(str)))
+  local args = ''
+  if options.use_ssml then args = '-m' end
+  local input = vim.fn.shellescape(str)
+  os.execute(fmt('%s %s %s', options.speak_command, args, input))
 end
 
 -- arguments:
@@ -171,6 +185,9 @@ function M.print(start_row, end_row, number)
   local prefix_formatter = get_prefix_formatter(number)
   for i,line in ipairs(lines) do
     local prefix = prefix_formatter(start_row + 1, i - 1)
+    if options.use_ssml then
+      line = line:gsub('<', '&lt;'):gsub('>', '&gt;')
+    end
     table.insert(output, prefix .. line)
   end
   M.speak(table.concat(output, '.\n'))
@@ -212,6 +229,10 @@ function M.print_cmd(args)
   -- TODO move cursor
 end
 
+function M.info(args)
+  M.speak(vim.treesitter.get_node():type():gsub('_', ' '))
+end
+
 -------------------- COMMANDS ------------------------------
 vim.api.nvim_create_user_command('P', M.print_cmd, {
   desc = 'Voice-print [range] lines.',
@@ -220,7 +241,12 @@ vim.api.nvim_create_user_command('P', M.print_cmd, {
 })
 
 vim.api.nvim_create_user_command('Z', M.ta, {
+  desc = 'Debug-print [range] lines with treesitter nodes',
   range = true,
+})
+
+vim.api.nvim_create_user_command('K', M.info, {
+  desc = 'Voice-print info about element below cursor',
 })
 
 ------------------------------------------------------------
