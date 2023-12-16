@@ -1,6 +1,12 @@
 -- minimum neovim version: 0.7
 --
--- NOTE: 'row' is 0-indexed, 'line' is 1-indexed when it describes an index.
+-- Numeric variables are called 'row' when 0-indexed, and 'line' when 1-indexed.
+-- There is a lot of confusion around indices here:
+-- • Vim uses 1-indexed rows and columns.
+-- • Neovim-lua uses 0-indexed rows and columns.
+-- • Lua uses 1-indexed lists and strings, and end-inclusive ranges.
+-- • Treesitter uses 0-indexed rows and columns, and end-exclusive ranges.
+
 
 -------------------- VARIABLES -----------------------------
 
@@ -29,15 +35,19 @@ local M = {}
 -- following TSNode convention, end_row is inclusive, end_col exclusive.
 -- end_col = -1 means until end of line.
 local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
-  if start_row > end_row or
+  if start_row > end_row or start_row < 0 or start_col < 0 or
     (start_row == end_row and end_col >= 0 and start_col >= end_col) then
     return
   end
-  -- TODO should we fail here when out of bounds?
   local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
+  if #lines == 0 then
+    return
+  elseif #lines < 1 + end_row - start_row then
+    end_row = start_row + #lines - 1
+  end
   if end_col < 0 then
     local last_line = lines[1 + end_row - start_row]
-    end_col = last_line and #last_line or 0
+    end_col = last_line and #last_line - 1 or 0
   end
 
   local function overlapping_named_descendant(node)
@@ -50,16 +60,21 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
 
   local output = {}
 
-  -- TODO improve naming
-  local function ensure_output_until(row, col, node)
-    if row < printed_row or (row == printed_row and col < printed_col) then
+  local function subline_until(col) -- exclusive
+    return lines[1 + printed_row - start_row]:sub(printed_col + 1, col)
+  end
+
+  local function ensure_output_until(row, col, node) -- col exclusive
+    if row < printed_row or (row == printed_row and col <= printed_col) then
       return
     end
-    local nt = ''
-    if node then nt = node:type() end
+    if row > end_row then
+      row = end_row
+      col = end_col + 1
+    end
     while printed_row < row do
       table.insert(output, {
-        text = lines[1 + printed_row - start_row]:sub(printed_col),
+        text = subline_including(),
         node = node,
       })
       printed_row = printed_row + 1
@@ -68,43 +83,40 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
     if row < printed_row or col <= printed_col then
       return
     end
+    if row == end_row then
+      col = math.min(col, end_col + 1)
+    end
     table.insert(output, {
-      text = lines[1 + row - start_row]:sub(printed_col, col - 1),
+      text = subline_until(col),
       node = node,
     })
     printed_col = col
   end
 
-  local function output_node_until(node, row, col)
-    -- TODO handle node:missing()
-    if not node:named() then
-      ensure_output_until(row, col)
-    else
-      ensure_output_until(row, col, node)
-    end
-  end
-
   local function add_to_output(node, surrounding_named_node)
     for child in node:iter_children() do
       local child_row1, child_col1, _ = child:start()
-      output_node_until(node, child_row1, child_col1)
       if node:named() then
+        ensure_output_until(child_row1, child_col1, node)
         add_to_output(child, node)
       else
+        ensure_output_until(child_row1, child_col1, surrounding_named_node)
         add_to_output(child, surrounding_named_node)
       end
     end
     local row2, col2, _ = node:end_()
     if node:named() then
-      output_node_until(node, row2, col2 + 1)
+      ensure_output_until(row2, col2, node)
     end
   end
 
   local function add_tree_to_output(tree)
     local node = overlapping_named_descendant(tree:root())
-    local row, col, _ = node:start()
-    ensure_output_until(row, col)
-    add_to_output(node, node)
+    if node then
+      local row, col, _ = node:start()
+      ensure_output_until(row, col)
+      add_to_output(node, node)
+    end
   end
 
   local success, parser = pcall(function()
@@ -167,7 +179,12 @@ local function get_prefix_formatter(number_flag)
   return none_formatter
 end
 
+local function type_format(type)
+  return type:gsub('_', ' ')
+end
+
 -------------------- PUBLIC --------------------------------
+
 function M.speak(str)
   local args = ''
   if options.use_ssml then args = '-m' end
@@ -200,12 +217,11 @@ end
 
 function M.tree_align(start_row, end_row)
   local t = buf_text_with_nodes(start_row, 0, end_row, -1)
-  print(vim.inspect(t))
   for _,tuple in ipairs(t) do
     local type = ''
-    if tuple.node then type = tuple.node:type() end
-    M.speak(type)
+    if tuple.node then tuple.type = tuple.node:type() end
   end
+  print(vim.inspect(t))
 end
 
 -- TODO rm this and cmd
@@ -230,10 +246,11 @@ function M.print_cmd(args)
 end
 
 function M.info(args)
-  M.speak(vim.treesitter.get_node():type():gsub('_', ' '))
+  M.speak(type_format(vim.treesitter.get_node():type()))
 end
 
 -------------------- COMMANDS ------------------------------
+
 vim.api.nvim_create_user_command('P', M.print_cmd, {
   desc = 'Voice-print [range] lines.',
   nargs = '*',
