@@ -19,7 +19,7 @@ local options = {
   ssml_breakformat = '<break /> ',
   fallback_breakformat = '.\n',
   numberformat = 'line %d%s',
-  relativenumber = 0, -- 0: never, 1: follow 'relativenumber', 2: always
+  relativenumber = 0,      -- 0: never, 1: follow 'relativenumber', 2: always
   relativenumberformat = 'newline %d%s',
   skip_empty_lines = true, -- mostly makes sense with number/relativnumber > 0.
   -- explicit number (via ex flag '#') triggers:
@@ -37,7 +37,7 @@ local M = {}
 -- end_col = -1 means until end of line.
 local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   if start_row > end_row or start_row < 0 or start_col < 0 or
-    (start_row == end_row and end_col >= 0 and start_col >= end_col) then
+      (start_row == end_row and end_col >= 0 and start_col >= end_col) then
     return
   end
   local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
@@ -124,7 +124,7 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   end)
 
   if success then
-    for _,tree in ipairs(parser:parse()) do
+    for _, tree in ipairs(parser:parse()) do
       add_tree_to_output(tree)
     end
   end
@@ -148,7 +148,7 @@ local function linenumber_formatter(number, offset)
   return fmt(options.numberformat, number + offset, breakformat())
 end
 
-local function relativenumber_formatter(number, offset)
+local function relativenumber_formatter(_, offset)
   if offset == 0 then
     return ''
   else
@@ -170,11 +170,11 @@ local function get_prefix_formatter(number_flag)
   if number_flag == false then return '' end -- explicit false case.
 
   if options.relativenumber >= 2 or (
-    options.relativenumber == 1 and
-      vim.api.nvim_get_option_value('relativenumber', {})) then
+        options.relativenumber == 1 and
+        vim.api.nvim_get_option_value('relativenumber', {})) then
     return relativenumber_formatter
   elseif options.number >= 2 or (
-    options.number == 1 and vim.api.nvim_get_option_value('number', {})) then
+        options.number == 1 and vim.api.nvim_get_option_value('number', {})) then
     return linenumber_formatter
   end
   return none_formatter
@@ -186,7 +186,14 @@ end
 
 local function ssml_escape(str)
   if options.use_ssml then
-    return (str:gsub('<', '&lt;'):gsub('>', '&gt;'))
+    local substitutions = {
+      ['"'] = '&quot;',
+      ['&'] = '&amp;',
+      -- ["'"] = '&apos;',
+      ['<'] = '&lt;',
+      ['>'] = '&gt;',
+    }
+    return (str:gsub('["\'&<>]', substitutions))
   else
     return str
   end
@@ -210,11 +217,11 @@ function M.print(start_row, end_row, number)
   if options.use_treesitter then
     local prefix_formatter = get_prefix_formatter(number)
     local lines = buf_text_with_nodes(start_row, 0, end_row, -1)
-    for i,line in ipairs(lines) do
+    for i, line in ipairs(lines) do
       if not options.skip_empty_lines or #line > 0 then
         local prefix = prefix_formatter(start_row + 1, i - 1)
         local line_text = {}
-        for _,node in ipairs(line) do
+        for _, node in ipairs(line) do
           table.insert(line_text, ssml_escape(node.text))
         end
         table.insert(output, prefix .. table.concat(line_text, breakformat()))
@@ -223,7 +230,7 @@ function M.print(start_row, end_row, number)
   else
     local prefix_formatter = get_prefix_formatter(number)
     local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
-    for i,line in ipairs(lines) do
+    for i, line in ipairs(lines) do
       if not options.skip_empty_lines or string.match(line, "%S") then
         local prefix = prefix_formatter(start_row + 1, i - 1)
         table.insert(output, prefix .. ssml_escape(line))
@@ -240,7 +247,7 @@ end
 
 function M.tree_align(start_row, end_row)
   local t = buf_text_with_nodes(start_row, 0, end_row, -1)
-  for _,tuple in ipairs(t) do
+  for _, tuple in ipairs(t) do
     if tuple.node then tuple.type = tuple.node:type() end
   end
   print(vim.inspect(t))
