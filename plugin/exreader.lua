@@ -19,13 +19,14 @@ local options = {
   ssml_breakformat = '<break /> ',
   fallback_breakformat = '.\n',
   numberformat = 'line %d%s',
-  relativenumber = 0, -- 0: absolute, 1: follow 'relativenumber', 2: always
+  relativenumber = 0, -- 0: never, 1: follow 'relativenumber', 2: always
   relativenumberformat = 'newline %d%s',
+  skip_empty_lines = true, -- mostly makes sense with number/relativnumber > 0.
   -- explicit number (via ex flag '#') triggers:
   -- 0: nonumber, 1: number, 2: relativenumber
   explicitnumber = 1,
-  use_ssml = 1, -- use Speech Synthesis Markup Language.
-  use_treesitter = 1,
+  use_ssml = true, -- use Speech Synthesis Markup Language.
+  use_treesitter = true,
 }
 
 local M = {}
@@ -58,11 +59,13 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   local printed_row = start_row
   local printed_col = start_col -- exclusive
 
-  local output = {}
+  local output = { {}, }
 
-  local function insert_row(node, col) -- exclusive
-    table.insert(output, {
-      text = lines[1 + printed_row - start_row]:sub(printed_col + 1, col),
+  local function insert_row(node, col) -- col exclusive
+    local text = lines[1 + printed_row - start_row]:sub(printed_col + 1, col)
+    if #text == 0 then return end
+    table.insert(output[#output], {
+      text = text,
       node = node,
       row = printed_row,
     })
@@ -78,6 +81,7 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
     end
     while printed_row < row do
       insert_row(node)
+      table.insert(output, {})
       printed_row = printed_row + 1
       printed_col = 0
     end
@@ -129,6 +133,7 @@ local function buf_text_with_nodes(start_row, start_col, end_row, end_col)
   return output
 end
 
+-- TODO distinguish short breaks between nodes and long breaks for newline
 local function breakformat()
   if options.use_ssml then
     return options.ssml_breakformat
@@ -179,6 +184,14 @@ local function type_format(type)
   return type:gsub('_', ' ')
 end
 
+local function ssml_escape(str)
+  if options.use_ssml then
+    return (str:gsub('<', '&lt;'):gsub('>', '&gt;'))
+  else
+    return str
+  end
+end
+
 -------------------- PUBLIC --------------------------------
 
 function M.speak(str)
@@ -192,16 +205,29 @@ end
 --   end_row:   0-based index.
 --   number:    whether to output line numbers.
 function M.print(start_row, end_row, number)
-  local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
   local output = {}
-  local prefix_formatter = get_prefix_formatter(number)
-  for i,line in ipairs(lines) do
-    if string.match(line, "%S") then
-      local prefix = prefix_formatter(start_row + 1, i - 1)
-      if options.use_ssml then
-        line = line:gsub('<', '&lt;'):gsub('>', '&gt;')
+  -- TODO factor out shared code
+  if options.use_treesitter then
+    local prefix_formatter = get_prefix_formatter(number)
+    local lines = buf_text_with_nodes(start_row, 0, end_row, -1)
+    for i,line in ipairs(lines) do
+      if not options.skip_empty_lines or #line > 0 then
+        local prefix = prefix_formatter(start_row + 1, i - 1)
+        local line_text = {}
+        for _,node in ipairs(line) do
+          table.insert(line_text, ssml_escape(node.text))
+        end
+        table.insert(output, prefix .. table.concat(line_text, breakformat()))
       end
-      table.insert(output, prefix .. line)
+    end
+  else
+    local prefix_formatter = get_prefix_formatter(number)
+    local lines = vim.api.nvim_buf_get_lines(0, start_row, end_row + 1, false)
+    for i,line in ipairs(lines) do
+      if not options.skip_empty_lines or string.match(line, "%S") then
+        local prefix = prefix_formatter(start_row + 1, i - 1)
+        table.insert(output, prefix .. ssml_escape(line))
+      end
     end
   end
   M.speak(table.concat(output, breakformat()))
