@@ -6,12 +6,17 @@ return {
   quote = {
     plain = "'",
     ssml = "&apos;",
-    pitch = "low", -- for testing
+    prosody = {
+      pitch = "low", -- for testing
+    },
   },
   ampersand = {
     plain = "&",
     ssml = "&amp;",
-    pitch = "+100%", -- for testing
+    prosody = {
+      pitch = "+100%", -- for testing
+      rate = "slow",   -- for testing
+    },
   },
   lt = {
     plain = "<",

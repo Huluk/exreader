@@ -292,19 +292,26 @@ local function pronounce(str)
     local char = str:sub(i, i)
     local substituted = false
     for _, symbol_table in pairs(symbol_tables) do
-      local v = symbol_map[symbol_table][char]
-      if v then
-        if type(v) == 'string' then
-          table.insert(result, v)
+      local token = symbol_map[symbol_table][char]
+      if token then
+        if type(token) == 'string' then
+          table.insert(result, token)
         elseif options.use_ssml then
-          if v.pitch then
-            local pitch = '<prosody pitch="' .. v.pitch .. '">'
-            table.insert(result, pitch .. v.ssml .. '</prosody>')
+          if token.prosody then
+            local prosody = {}
+            for k, v in pairs(token.prosody) do
+              table.insert(prosody, string.format('%s="%s"', k, v))
+            end
+            table.insert(result, string.format(
+              '<prosody %s>%s</prosody>',
+              table.concat(prosody, ' '),
+              token.ssml
+            ))
           else
-            table.insert(result, v.ssml)
+            table.insert(result, token.ssml)
           end
         else
-          table.insert(result, v.plain)
+          table.insert(result, token.plain)
         end
         table.insert(result, break_str)
         substituted = true
