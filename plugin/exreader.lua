@@ -13,6 +13,8 @@
 local fmt = string.format
 local ts_utils = require 'nvim-treesitter.ts_utils'
 
+local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1).source:sub(2), ':h:h')
+
 local options = {
   speak_command = 'espeak --punct',
   number = 1, -- 0: never, 1: follow 'number', 2: always
@@ -25,11 +27,100 @@ local options = {
   -- explicit number (via ex flag '#') triggers:
   -- 0: nonumber, 1: number, 2: relativenumber
   explicitnumber = 1,
-  use_ssml = true, -- use Speech Synthesis Markup Language.
+  use_ssml = true,                 -- use Speech Synthesis Markup Language.
   use_treesitter = true,
+  use_symbol_pronunciation = true, -- use symbol-to-word mappings
+  symbol_files = {
+    common = plugin_dir .. '/symbols/common.tsv',
+    ssml = plugin_dir .. '/symbols/ssml.tsv',
+  },
+  pronounce_files = {
+    en = 'pronounce/en',
+  },
 }
 
 local M = {}
+
+-- Symbol pronunciation mappings
+local symbol_map = {}
+
+-- Track espeak availability
+local speak_command_available = nil
+
+-------------------- SYMBOL LOADING ------------------------
+
+local function check_speech_provider()
+  if speak_command_available == true then
+    return true
+  end
+
+  -- Extract just the command name (first word) from speak_command
+  local command = options.speak_command:match('^(%S+)')
+
+  -- Check if command exists
+  local handle = io.popen('command -v ' .. command .. ' 2>/dev/null')
+  if handle then
+    local result = handle:read('*a')
+    handle:close()
+    speak_command_available = result ~= ''
+  else
+    speak_command_available = false
+  end
+
+  if not speak_command_available then
+    vim.notify(
+      'exreader: ' .. command .. ' not found. Install or configure speak_command.',
+      vim.log.levels.ERROR
+    )
+  end
+
+  return speak_command_available
+end
+
+local function load_tsv(filepath)
+  local mappings = {}
+  local file = io.open(filepath, 'r')
+  if not file then
+    vim.notify('exreader: Could not open ' .. filepath, vim.log.levels.WARN)
+    return mappings
+  end
+
+  for line in file:lines() do
+    -- Skip empty lines and comments
+    if line:match('%S') and not line:match('^%s*#') then
+      local symbol, word = line:match('^([^\t]+)\t+(.+)$')
+      if symbol and word then
+        mappings[symbol] = word:gsub('%s+$', '') -- trim trailing whitespace
+      end
+    end
+  end
+
+  file:close()
+  return mappings
+end
+
+local function init_symbol_maps()
+  -- Load common symbol mappings
+  symbol_map = {
+    common = load_tsv(options.symbol_files.common),
+    ssml = load_tsv(options.symbol_files.ssml),
+  }
+
+  -- Load language-specific aliases
+  local lang_aliases = {
+    en = require(options.pronounce_files.en),
+  }
+
+  -- Resolve aliases: replace references with actual words
+  for _, collection in pairs(symbol_map) do
+    for token, key in pairs(collection) do
+      local alias = lang_aliases['en'][key]
+      if alias then
+        collection[token] = alias
+      end
+    end
+  end
+end
 
 -------------------- HELPERS -------------------------------
 
@@ -184,33 +275,69 @@ local function type_format(type)
   return type:gsub('_', ' ')
 end
 
-local function ssml_escape(str)
-  if options.use_ssml then
-    local substitutions = {
-      ['"'] = '&quot;',
-      ['&'] = '&amp;',
-      -- ["'"] = '&apos;',
-      ['<'] = '&lt;',
-      ['>'] = '&gt;',
-    }
-    return (str:gsub('["\'&<>]', substitutions))
-  else
-    return str
+local function pronounce(str)
+  local result = {}
+  local break_str = breakformat()
+
+  local symbol_tables = {}
+  if options.use_symbol_pronunciation then
+    table.insert(symbol_tables, 'common')
   end
+  if options.use_ssml then
+    table.insert(symbol_tables, 'ssml')
+  end
+
+  -- Process character by character
+  for i = 1, #str do
+    local char = str:sub(i, i)
+    local substituted = false
+    for _, symbol_table in pairs(symbol_tables) do
+      local v = symbol_map[symbol_table][char]
+      if v then
+        if type(v) == 'string' then
+          table.insert(result, v)
+        elseif options.use_ssml then
+          if v.pitch then
+            local pitch = '<prosody pitch="' .. v.pitch .. '">'
+            table.insert(result, pitch .. v.ssml .. '</prosody>')
+          else
+            table.insert(result, v.ssml)
+          end
+        else
+          table.insert(result, v.plain)
+        end
+        table.insert(result, break_str)
+        substituted = true
+        break
+      end
+    end
+    if not substituted then
+      table.insert(result, char)
+    end
+  end
+
+  return table.concat(result)
 end
 
 -------------------- PUBLIC --------------------------------
 
 function M.speak(str)
+  if not check_speech_provider() then
+    return
+  end
+
   local args = options.use_ssml and '-m' or ''
   local input = vim.fn.shellescape(str)
-  os.execute(fmt('%s %s %s', options.speak_command, args, input))
+  local result = os.execute(fmt('%s %s %s', options.speak_command, args, input))
+
+  if result ~= 0 and result ~= true then
+    vim.notify('exreader: speak command failed', vim.log.levels.WARN)
+  end
 end
 
--- arguments:
---   start_row: 0-based index.
---   end_row:   0-based index.
---   number:    whether to output line numbers.
+---@param start_row number 0-based index.
+---@param end_row number 0-based index.
+---@param number number line number output mode
 function M.print(start_row, end_row, number)
   local output = {}
   -- TODO factor out shared code
@@ -222,7 +349,7 @@ function M.print(start_row, end_row, number)
         local prefix = prefix_formatter(start_row + 1, i - 1)
         local line_text = {}
         for _, node in ipairs(line) do
-          table.insert(line_text, ssml_escape(node.text))
+          table.insert(line_text, pronounce(node.text))
         end
         table.insert(output, prefix .. table.concat(line_text, breakformat()))
       end
@@ -233,7 +360,7 @@ function M.print(start_row, end_row, number)
     for i, line in ipairs(lines) do
       if not options.skip_empty_lines or string.match(line, "%S") then
         local prefix = prefix_formatter(start_row + 1, i - 1)
-        table.insert(output, prefix .. ssml_escape(line))
+        table.insert(output, prefix .. pronounce(line))
       end
     end
   end
@@ -276,6 +403,16 @@ function M.info(args)
   M.speak(type_format(vim.treesitter.get_node():type()))
 end
 
+function M.setup(user_options)
+  -- Merge user options with defaults
+  if user_options then
+    options = vim.tbl_deep_extend('force', options, user_options)
+  end
+
+  -- Load symbol maps
+  init_symbol_maps()
+end
+
 -------------------- COMMANDS ------------------------------
 
 vim.api.nvim_create_user_command('P', M.print_cmd, {
@@ -292,6 +429,11 @@ vim.api.nvim_create_user_command('Z', M.debug_tree, {
 vim.api.nvim_create_user_command('K', M.info, {
   desc = 'Voice-print info about element below cursor',
 })
+
+-------------------- INITIALIZATION ------------------------
+
+-- Auto-initialize with default settings
+init_symbol_maps()
 
 ------------------------------------------------------------
 return M
